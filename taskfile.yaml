@@ -1,0 +1,194 @@
+version: 3
+
+vars:
+  CLUSTER_NAME: keda-rabbitmq
+  CONTEXT_NAME:
+    sh: "echo kind-{{.CLUSTER_NAME}}"
+  OUTPUT_DIR:
+    sh: "echo ${PWD}/dist"
+  DOCKER_IMAGE_TAG: latest
+  CONSUMER_DOCKER_IMAGE: umarhussain15/keda-rabbitmq-consumer
+  PRODUCER_DOCKER_IMAGE: umarhussain15/keda-rabbitmq-producer
+tasks:
+  output-dir:
+    cmd: mkdir -p {{.OUTPUT_DIR}}
+  build-consumer:
+    dir: ./consumer/
+    cmds:
+      - task: output-dir
+      - go build -o {{.OUTPUT_DIR}}/consumer
+  build-producer:
+    dir: ./producer/
+    cmds:
+      - task: output-dir
+      - go build -o {{.OUTPUT_DIR}}/consumer
+  build-docker:
+    cmds:
+      - task: build-consumer-docker
+      - task: build-producer-docker
+  build-producer-docker:
+    dir: ./producer/
+    cmds:
+      - docker build -t {{.PRODUCER_DOCKER_IMAGE}}:{{.DOCKER_IMAGE_TAG}} .
+  build-consumer-docker:
+    dir: ./consumer/
+    cmds:
+      - docker build -t {{.CONSUMER_DOCKER_IMAGE}}:{{.DOCKER_IMAGE_TAG}} .
+  kind-cli-present:
+    cmd: command -v kind &> /dev/null
+    desc: Checks if kind cli is present or not
+    summary: If kind cli is missing please install it from here https://kind.sigs.k8s.io/docs/user/quick-start/#installation
+  helmfile-cli-present:
+    cmd: command -v helmfile &> /dev/null
+    desc: Checks if helmfile cli is present or not
+    summary: If helmfile cli is missing please install it from here https://helmfile.readthedocs.io/en/latest/
+  cli-checks:
+    deps:
+      - task: kind-cli-present
+      - task: helmfile-cli-present
+  use-kind-cluster-context:
+    cmd: kubectl config use-context {{.CONTEXT_NAME}}
+    desc: Switch to kube context of cluster used for this project
+  clean:
+    cmd: kind delete cluster -n "{{.CLUSTER_NAME}}"
+  kind-prepare-cluster:
+    deps:
+      - task: kind-cli-present
+    cmds:
+      - |
+        # Check if the context is present
+        if kubectl config get-contexts "{{.CONTEXT_NAME}}" &> /dev/null
+        then
+            echo "Cluster context '{{.CONTEXT_NAME}}' is present."
+            kubectl cluster-info --context "{{.CONTEXT_NAME}}"
+        else
+            echo "Cluster context '{{.CONTEXT_NAME}}' is not present. Creating a new kind cluster..."
+
+            # Create a new kind cluster
+            kind create cluster --name "{{.CLUSTER_NAME}}"
+
+            # Check if the kind cluster was created successfully
+            if [ $? -eq 0 ]; then
+                echo "Kind cluster '{{.CONTEXT_NAME}}' created successfully."
+            else
+                echo "Failed to create kind cluster '{{.CONTEXT_NAME}}'."
+            fi
+        fi
+      - task: kind-prepare-operators
+      - cmd: kubectl apply -f cluster/rabbitmq-cluster.yaml
+  kind-prepare-operators:
+      deps:
+        - task: use-kind-cluster-context
+        - task: helmfile-cli-present
+      cmd: helmfile --kube-context {{.CONTEXT_NAME}} apply -f cluster/helmfile.yaml
+  kind-load-images:
+    deps:
+      - task: use-kind-cluster-context
+      - task: kind-cli-present
+    cmds:
+      - kind load docker-image {{.PRODUCER_DOCKER_IMAGE}}:{{.DOCKER_IMAGE_TAG}} --name {{.CLUSTER_NAME}}
+      - kind load docker-image {{.CONSUMER_DOCKER_IMAGE}}:{{.DOCKER_IMAGE_TAG}} --name {{.CLUSTER_NAME}}
+  kind-build-load-images:
+    cmds:
+      - task: build-docker
+      - task: kind-load-images
+  create-user-secrets:
+    deps:
+      - task: use-kind-cluster-context
+    cmds:
+      - for: ["producer", "consumer"]
+        task: create-user-secret
+        vars:
+          NAME:
+            sh: echo {{.ITEM}}-user
+
+  create-user-secret:
+    internal: true
+    deps:
+      - task: use-kind-cluster-context
+    vars:
+      PASSWORD:
+        sh: openssl rand -base64 32 | tr -d "=+/" | cut -c1-24
+      SECRET_FILE: |
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: {{.NAME}}
+        data:
+          username: {{.NAME | b64enc }}
+          password: {{.PASSWORD | b64enc }}
+    cmd: |
+          if ! echo "{{.SECRET_FILE}}" | kubectl get --context {{.CONTEXT_NAME}} -f - > /dev/null 2>&1; then
+              echo "{{.SECRET_FILE}}" | kubectl apply --context {{.CONTEXT_NAME}} -f -
+          else
+              echo "Secret already present, not creating it"
+          fi
+
+  create-keda-secret:
+    deps:
+      - task: use-kind-cluster-context
+    vars:
+      PASSWORD:
+        sh: openssl rand -base64 32 | tr -d "=+/" | cut -c1-24
+      NAME: keda-user
+      RABBITMQ_CLUSTER: rabbitmq
+      SECRET_FILE: |
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: {{.NAME}}
+        data:
+          hostString: {{ printf "http://%s:%s@%s.default:15672/%s" .NAME .PASSWORD .RABBITMQ_CLUSTER ( "") | b64enc }}
+          hostString2: {{ printf "http://%s:%s@%s.default:15672/%s" .NAME .PASSWORD .RABBITMQ_CLUSTER ( "/"| urlquery) | b64enc }}
+          username: {{ .NAME | b64enc }}
+          password: {{.PASSWORD | b64enc }}
+      RABBITMQ_FILE: |
+        apiVersion: rabbitmq.com/v1beta1
+        kind: User
+        metadata:
+          name: {{.NAME}}
+        spec:
+          tags:
+            - management
+            - monitoring
+          importCredentialsSecret:
+            name: {{.NAME}}
+          rabbitmqClusterReference:
+            name: {{.RABBITMQ_CLUSTER}}
+        ---
+        apiVersion: rabbitmq.com/v1beta1
+        kind: Permission
+        metadata:
+          name: {{.NAME}}
+        spec:
+          permissions:
+            read: .*
+          rabbitmqClusterReference:
+            name: {{.RABBITMQ_CLUSTER}}
+          userReference:
+            name: {{.NAME}}
+          vhost: /
+    cmds:
+      - |
+          if ! echo "{{.SECRET_FILE}}" | kubectl get --context {{.CONTEXT_NAME}} -f - > /dev/null 2>&1; then
+              echo "{{.SECRET_FILE}}" | kubectl apply --context {{.CONTEXT_NAME}} -f -
+          else
+              echo "Secret already present, not creating it"
+          fi
+      - echo "{{.RABBITMQ_FILE}}" | kubectl apply --context {{.CONTEXT_NAME}} -f -
+
+  apps-helm-install:
+    deps:
+      - task: use-kind-cluster-context
+      - task: kind-build-load-images
+    cmd: helmfile --kube-context {{.CONTEXT_NAME}} sync -f cluster/apps/helmfile.yaml
+
+  start-stack:
+    deps:
+      - task: cli-checks
+      - task: output-dir
+      - task: kind-prepare-cluster
+      - task: kind-prepare-operators
+      - task: create-user-secrets
+      - task: create-keda-secret
+      - task: apps-helm-install

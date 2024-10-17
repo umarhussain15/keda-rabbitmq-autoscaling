@@ -1,0 +1,6 @@
+helmDefaults:
+  kubeContext: keda-rabbitmq
+
+releases:
+  - name: keda-rabbitmq
+    chart: ../../helm/keda-rabbitmq

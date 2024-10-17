@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-producer
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "keda-rabbitmq.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "keda-rabbitmq.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "keda-rabbitmq.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.producer.repository }}:{{ .Values.producer.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PORT
+              value: {{.Values.service.port | quote}}
+            - name: RABBITMQ_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{.Values.producer.rabbitmq.secretRef.name}}
+                  key: {{.Values.producer.rabbitmq.secretRef.usernameKey}}
+            - name: RABBITMQ_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{.Values.producer.rabbitmq.secretRef.name}}
+                  key: {{.Values.producer.rabbitmq.secretRef.passwordKey}}
+            - name: EXCHANGE_NAME
+              value: {{.Values.rabbitmq.producerExchange | quote }}
+            - name: QUEUE_NAME
+              value: {{.Values.rabbitmq.workQueueName | quote }}
+            - name: ROUTING_KEY
+              value: {{.Values.rabbitmq.workQueueName | quote }}
+            - name: VHOST
+              value: {{.Values.rabbitmq.vhost | quote }}
+            - name: RABBITMQ_HOST
+              value: "{{.Values.rabbitmq.clusterName}}.{{ default .Values.rabbitmq.namespace .Release.Namespace}}"
+            - name: RABBITMQ_PORT
+              value: {{.Values.rabbitmq.port | default "5672" | quote }}
+            - name: PUBLISH_INTERVAL_MIN_MS
+              value: {{.Values.producer.interval.minimumMilliseconds | quote }}
+            - name: PUBLISH_INTERVAL_MAX_MS
+              value: {{ .Values.producer.interval.maximumMilliseconds | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

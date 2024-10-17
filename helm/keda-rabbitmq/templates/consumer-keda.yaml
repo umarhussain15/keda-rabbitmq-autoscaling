@@ -1,0 +1,33 @@
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-consumer
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: host
+      name: {{.Values.keda.rabbitmq.secretRef.name}}
+      key: {{.Values.keda.rabbitmq.secretRef.hostKeyName}}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-consumer
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name:  {{ include "keda-rabbitmq.fullname" . }}-consumer
+  cooldownPeriod: 180
+  minReplicaCount: 1
+  maxReplicaCount: 10
+  triggers:
+    - type: rabbitmq
+      metadata:
+        protocol: {{.Values.keda.rabbitmq.protocol}}
+        queueName: {{.Values.rabbitmq.workQueueName}}
+        mode: QueueLength
+        value: "20"
+      authenticationRef:
+        name: {{ include "keda-rabbitmq.fullname" . }}-consumer

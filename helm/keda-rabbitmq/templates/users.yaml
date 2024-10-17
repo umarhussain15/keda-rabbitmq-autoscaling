@@ -1,0 +1,61 @@
+apiVersion: rabbitmq.com/v1beta1
+kind: User
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-consumer
+  namespace: {{ default .Values.rabbitmq.namespace .Release.Namespace}}
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  rabbitmqClusterReference:
+    name: {{.Values.rabbitmq.clusterName}}
+  importCredentialsSecret:
+    name: {{.Values.consumer.rabbitmq.secretRef.name}}
+---
+apiVersion: rabbitmq.com/v1beta1
+kind: User
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-producer
+  namespace: {{ default .Values.rabbitmq.namespace .Release.Namespace}}
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  rabbitmqClusterReference:
+    name: {{.Values.rabbitmq.clusterName}}
+  importCredentialsSecret:
+    name: {{.Values.producer.rabbitmq.secretRef.name}}
+---
+apiVersion: rabbitmq.com/v1beta1
+kind: Permission
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-consumer
+  namespace: {{ default .Values.rabbitmq.namespace .Release.Namespace}}
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  vhost: {{.Values.rabbitmq.vhost}}
+  userReference:
+    name: {{ include "keda-rabbitmq.fullname" . }}-consumer # name of the RabbitMQ user
+  permissions:
+    write: ""
+    configure: ""
+    read: ".*" # allow only read to consumer
+  rabbitmqClusterReference:
+    name: {{.Values.rabbitmq.clusterName}}
+---
+apiVersion: rabbitmq.com/v1beta1
+kind: Permission
+metadata:
+  name: {{ include "keda-rabbitmq.fullname" . }}-producer
+  namespace: {{ default .Values.rabbitmq.namespace .Release.Namespace}}
+  labels:
+    {{- include "keda-rabbitmq.labels" . | nindent 4 }}
+spec:
+  vhost: {{.Values.rabbitmq.vhost}}
+  userReference:
+    name: {{ include "keda-rabbitmq.fullname" . }}-producer # name of the RabbitMQ user
+  permissions:
+    write: ".*" # allow only write to producer
+    configure: ""
+    read: ""
+  rabbitmqClusterReference:
+    name: {{.Values.rabbitmq.clusterName}}

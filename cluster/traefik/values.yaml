@@ -1,0 +1,9 @@
+ingressClass:
+  isDefaultClass: false
+  name: traefik-internal
+
+gatewayClass:
+  name: traefik-internal
+
+deployment:
+    replicas: 2
